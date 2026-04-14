@@ -1,0 +1,51 @@
+#!/bin/bash
+# {{ ansible_managed }}
+# notify script for VRRP instance {{ item.name }}
+
+set -e
+
+log() {
+    echo "$*" | systemd-cat -p info -t keepalived_{{ item.name }}
+}
+
+STATE_DIR="{{ keepalived_state_dir }}"
+if [ ! -d "$STATE_DIR" ] ; then
+    mkdir -p "$STATE_DIR"
+    chmod 0755 "$STATE_DIR"
+fi
+
+# $1 = "GROUP"|"INSTANCE"
+# $2 = name of group or instance
+# $3 = target state ("MASTER"|"BACKUP"|"FAULT")
+INSTANCE_NAME="$2"
+TARGET_STATE="$3"
+
+log "instance=${INSTANCE_NAME} target=${TARGET_STATE}"
+
+STATE=
+case "$TARGET_STATE" in
+    MASTER) STATE="leader" ;;
+    BACKUP) STATE="failover" ;;
+    FAULT)  STATE="error" ;;
+    *)
+        log "unexpected state: ${TARGET_STATE}"
+        exit 1
+        ;;
+esac
+
+STATE_FILE="${STATE_DIR}/{{ item.name }}"
+echo "$STATE" > "$STATE_FILE"
+chmod 644 "$STATE_FILE"
+
+{% for state_key in ['master', 'backup', 'fault'] %}
+{% set actions = item.notify_actions | default({}) %}
+{% if actions[state_key] | default([]) | length > 0 %}
+if [ "$TARGET_STATE" == "{{ state_key | upper }}" ] ; then
+{% for action in actions[state_key] %}
+    log "running: {{ action }}"
+    {{ action }} || log "action failed: {{ action }}"
+{% endfor %}
+fi
+
+{% endif %}
+{% endfor %}

@@ -1,0 +1,24 @@
+#!/bin/bash
+# {{ ansible_managed }}
+# check wrapper for VRRP instance {{ item.name }}
+# wraps user check script with maintenance mode support
+
+set -e
+
+log() {
+    echo "$*" | systemd-cat -p info -t keepalived_{{ item.name }}
+}
+
+{% if item.maint_file | default('') != '' %}
+if [ -e "{{ item.maint_file }}" ] ; then
+    log "maintenance mode active"
+    exit 1
+fi
+{% endif %}
+
+{% if item.check_script | default('') != '' %}
+exec {{ item.check_script }}
+{% else %}
+# no user check script, maintenance-only wrapper
+exit 0
+{% endif %}

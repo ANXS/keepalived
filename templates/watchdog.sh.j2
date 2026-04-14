@@ -1,0 +1,46 @@
+#!/bin/bash
+# {{ ansible_managed }}
+# watchdog for VRRP instance {{ item.name }}
+# ensures service states match VRRP state
+
+set -e
+
+log() {
+    echo "$*" | systemd-cat -p info -t keepalived_watchdog_{{ item.name }}
+}
+
+STATE_FILE="{{ keepalived_state_dir }}/{{ item.name }}"
+SETTLE_WAIT="{{ item.watchdog_settle | default(10) }}"
+
+if [ ! -e "$STATE_FILE" ] ; then
+    log "no state file, skipping"
+    exit 0
+fi
+
+VRRP_STATE="$(cat "$STATE_FILE")"
+
+{% for svc in item.watchdog_services | default([]) %}
+SVC_NAME="{{ svc.name }}"
+SVC_STATUS="$(systemctl is-active "$SVC_NAME" 2> /dev/null || true)"
+
+{% if svc.state_master | default('') != '' %}
+if [ "$VRRP_STATE" == "leader" ] && [ "$SVC_STATUS" != "active" ] ; then
+    sleep "$SETTLE_WAIT"
+    if ! systemctl is-active "$SVC_NAME" > /dev/null 2>&1 ; then
+        log "starting $SVC_NAME (expected active for leader)"
+        systemctl start "$SVC_NAME"
+    fi
+fi
+{% endif %}
+
+{% if svc.state_backup | default('') != '' %}
+if [ "$VRRP_STATE" == "failover" ] && [ "$SVC_STATUS" == "active" ] ; then
+    sleep "$SETTLE_WAIT"
+    if systemctl is-active "$SVC_NAME" > /dev/null 2>&1 ; then
+        log "stopping $SVC_NAME (expected inactive for failover)"
+        systemctl stop "$SVC_NAME"
+    fi
+fi
+{% endif %}
+
+{% endfor %}

@@ -1,0 +1,8 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Keepalived watchdog for {{ item.name }}
+After=keepalived.service
+
+[Service]
+Type=oneshot
+ExecStart={{ keepalived_conf_dir }}/watchdog_{{ item.name }}.sh

@@ -1,0 +1,24 @@
+---
+- name: "converge keepalived nodes"
+  hosts: keepalived_nodes
+  become: true
+  roles:
+    - role: "anxs-keepalived"
+      vars:
+        keepalived_instances:
+          - name: "test"
+            interface: "eth0"
+            router_id: 1
+            priority: "{{ 200 if 'node1' in inventory_hostname else 100 }}"
+            state: "BACKUP"
+            vip: "172.28.0.10"
+            advert_int: 1
+            preempt_delay: 5
+            use_vmac: false
+            maint_file: "/var/cache/keepalived-maint"
+            unicast_peers: "{{ groups['keepalived_nodes'] | map('extract', hostvars, 'ansible_default_ipv4') | map(attribute='address') | reject('equalto', ansible_default_ipv4.address) | list }}"
+            builtin_checks: {}
+            notify_actions:
+              master: []
+              backup: []
+              fault: []

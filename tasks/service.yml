@@ -1,0 +1,20 @@
+---
+- name: "Ensure keepalived started"
+  ansible.builtin.service:
+    name: keepalived
+    state: started
+    enabled: true
+  register: keepalived_started
+
+- name: "Restart keepalived"
+  ansible.builtin.service:
+    name: keepalived
+    state: restarted
+  when: >-
+    (not keepalived_started.changed) and
+      (keepalived_config.changed
+      or keepalived_notify_scripts.changed | default(false)
+      or keepalived_custom_notify_scripts.changed | default(false)
+      or keepalived_check_wrappers.changed | default(false)
+      or keepalived_builtin_scripts.changed | default(false)
+      or keepalived_user_scripts.changed | default(false))

@@ -1,0 +1,9 @@
+---
+- name: "Render keepalived configuration"
+  ansible.builtin.template:
+    src: "keepalived.conf.j2"
+    dest: "{{ keepalived_conf_dir }}/keepalived.conf"
+    owner: "root"
+    group: "root"
+    mode: "0644"
+  register: keepalived_config

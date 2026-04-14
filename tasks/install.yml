@@ -1,0 +1,20 @@
+---
+- name: "Install keepalived"
+  ansible.builtin.apt:
+    pkg: "keepalived"
+    state: present
+
+- name: "Enable ip_nonlocal_bind"
+  ansible.posix.sysctl:
+    name: "net.ipv4.ip_nonlocal_bind"
+    value: "1"
+    state: "present"
+  when: keepalived_sysctl_nonlocal_bind
+
+- name: "Create state directory"
+  ansible.builtin.file:
+    path: "{{ keepalived_state_dir }}"
+    state: directory
+    owner: "root"
+    group: "root"
+    mode: "0755"

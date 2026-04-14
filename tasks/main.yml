@@ -1,0 +1,12 @@
+---
+- name: "Install and configure keepalived"
+  ansible.builtin.include_tasks: "install.yml"
+
+- name: "Deploy keepalived scripts"
+  ansible.builtin.include_tasks: "scripts.yml"
+
+- name: "Render keepalived configuration"
+  ansible.builtin.include_tasks: "config.yml"
+
+- name: "Manage keepalived service"
+  ansible.builtin.include_tasks: "service.yml"

@@ -1,0 +1,61 @@
+# {{ ansible_managed }}
+
+global_defs {
+    script_user {{ keepalived_script_user }} {{ keepalived_script_group }}
+{% if keepalived_enable_script_security %}
+    enable_script_security
+{% endif %}
+    max_auto_priority
+    vrrp_no_swap
+    checker_no_swap
+}
+
+{% for instance in keepalived_instances %}
+{% set has_check = instance.check_script | default('') != '' or instance.maint_file | default('') != '' %}
+{% if has_check %}
+{% set effective_check = keepalived_conf_dir + '/check_wrapper_' + instance.name + '.sh' if instance.maint_file | default('') != '' else instance.check_script %}
+vrrp_script check_{{ instance.name }} {
+    script "{{ effective_check }}"
+    interval {{ instance.check_interval | default(1) }}
+    timeout {{ instance.check_timeout | default(2) }}
+    fall {{ instance.check_fall | default(2) }}
+    rise {{ instance.check_rise | default(5) }}
+}
+
+{% endif %}
+vrrp_instance {{ instance.name }} {
+    state {{ instance.state | default('BACKUP') }}
+    interface {{ instance.interface }}
+    virtual_router_id {{ instance.router_id }}
+    priority {{ instance.priority }}
+    advert_int {{ instance.advert_int | default(1) }}
+    preempt_delay {{ instance.preempt_delay | default(30) }}
+{% if instance.use_vmac | default(false) %}
+    use_vmac
+{% if instance.vmac_xmit_base | default(true) %}
+    vmac_xmit_base
+{% endif %}
+{% endif %}
+
+    virtual_ipaddress {
+        {{ instance.vip }}
+    }
+{% if has_check %}
+
+    track_script {
+        check_{{ instance.name }}
+    }
+{% endif %}
+
+    notify "{{ keepalived_conf_dir }}/notify_{{ instance.name }}.sh"
+{% if instance.unicast_peers | default([]) | length > 0 %}
+
+    unicast_peer {
+{% for peer in instance.unicast_peers %}
+        {{ peer }}
+{% endfor %}
+    }
+{% endif %}
+}
+
+{% endfor %}

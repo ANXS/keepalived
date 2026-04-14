@@ -1,0 +1,49 @@
+---
+# global settings
+keepalived_sysctl_nonlocal_bind: true
+keepalived_script_user: "root"
+keepalived_script_group: "root"
+keepalived_enable_script_security: true
+keepalived_state_dir: "/var/run/keepalived"
+keepalived_conf_dir: "/etc/keepalived"
+
+# VRRP instances (list)
+keepalived_instances: []
+# Example:
+#   - name: "dns"
+#     interface: "{{ ansible_default_ipv4.interface }}"
+#     router_id: 1
+#     priority: 100
+#     state: "BACKUP"
+#     vip: "192.168.1.100"
+#     advert_int: 1
+#     preempt_delay: 30
+#     use_vmac: false
+#     vmac_xmit_base: true   # send VRRP adverts on base interface (recommended)
+#     check_script: "/etc/keepalived/check_dns.sh"
+#     check_interval: 1
+#     check_timeout: 2
+#     check_fall: 2
+#     check_rise: 5
+#     maint_file: ""
+#     unicast_peers: []
+#     notify_actions:
+#       master: []
+#       backup: []
+#       fault: []
+#     watchdog_services: []
+
+# user-provided scripts to deploy
+keepalived_check_scripts: []
+# Example:
+#   - src: "templates/check_dns.sh.j2"
+#     dest: "/etc/keepalived/check_dns.sh"
+
+# built-in check components (opt-in, per instance)
+# set these on individual instances:
+#   builtin_checks:
+#     dns_dig: true
+#     dns_dig_host: "example.com"
+#     http_health: true
+#     http_health_url: "http://localhost:8080/health"
+#     http_health_timeout: 0.2

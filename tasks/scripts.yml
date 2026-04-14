@@ -1,0 +1,120 @@
+---
+- name: "Deploy notify scripts"
+  ansible.builtin.template:
+    src: "notify.sh.j2"
+    dest: "{{ keepalived_conf_dir }}/notify_{{ item.name }}.sh"
+    owner: "root"
+    group: "{{ keepalived_script_group }}"
+    mode: "0770"
+  loop: "{{ keepalived_instances }}"
+  loop_control:
+    label: "notify_{{ item.name }}.sh"
+  when: item.notify_script | default('') == ''
+  register: keepalived_notify_scripts
+
+- name: "Deploy custom notify scripts"
+  ansible.builtin.copy:
+    src: "{{ item.notify_script }}"
+    dest: "{{ keepalived_conf_dir }}/notify_{{ item.name }}.sh"
+    owner: "root"
+    group: "{{ keepalived_script_group }}"
+    mode: "0770"
+  loop: "{{ keepalived_instances }}"
+  loop_control:
+    label: "notify_{{ item.name }}.sh"
+  when: item.notify_script | default('') != ''
+  register: keepalived_custom_notify_scripts
+
+- name: "Deploy check wrappers"
+  ansible.builtin.template:
+    src: "check_wrapper.sh.j2"
+    dest: "{{ keepalived_conf_dir }}/check_wrapper_{{ item.name }}.sh"
+    owner: "root"
+    group: "{{ keepalived_script_group }}"
+    mode: "0770"
+  loop: "{{ keepalived_instances }}"
+  loop_control:
+    label: "check_wrapper_{{ item.name }}.sh"
+  when: item.maint_file | default('') != ''
+  register: keepalived_check_wrappers
+
+- name: "Deploy built-in check scripts"
+  ansible.builtin.template:
+    src: "check_builtin.sh.j2"
+    dest: "{{ keepalived_conf_dir }}/check_builtin_{{ item.name }}.sh"
+    owner: "root"
+    group: "{{ keepalived_script_group }}"
+    mode: "0770"
+  loop: "{{ keepalived_instances }}"
+  loop_control:
+    label: "check_builtin_{{ item.name }}.sh"
+  when: item.builtin_checks | default({}) | length > 0
+  register: keepalived_builtin_scripts
+
+- name: "Deploy user-provided check scripts"
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: "root"
+    group: "{{ keepalived_script_group }}"
+    mode: "0770"
+  loop: "{{ keepalived_check_scripts }}"
+  loop_control:
+    label: "{{ item.dest }}"
+  register: keepalived_user_scripts
+
+- name: "Deploy watchdog scripts"
+  ansible.builtin.template:
+    src: "watchdog.sh.j2"
+    dest: "{{ keepalived_conf_dir }}/watchdog_{{ item.name }}.sh"
+    owner: "root"
+    group: "{{ keepalived_script_group }}"
+    mode: "0770"
+  loop: "{{ keepalived_instances }}"
+  loop_control:
+    label: "watchdog_{{ item.name }}.sh"
+  when: item.watchdog_services | default([]) | length > 0
+  register: keepalived_watchdog_scripts
+
+- name: "Deploy watchdog systemd service"
+  ansible.builtin.template:
+    src: "watchdog.service.j2"
+    dest: "/etc/systemd/system/keepalived-watchdog@{{ item.name }}.service"
+    owner: "root"
+    group: "root"
+    mode: "0644"
+  loop: "{{ keepalived_instances }}"
+  loop_control:
+    label: "keepalived-watchdog@{{ item.name }}.service"
+  when: item.watchdog_services | default([]) | length > 0
+  register: keepalived_watchdog_service_units
+
+- name: "Deploy watchdog systemd timer"
+  ansible.builtin.template:
+    src: "watchdog.timer.j2"
+    dest: "/etc/systemd/system/keepalived-watchdog@{{ item.name }}.timer"
+    owner: "root"
+    group: "root"
+    mode: "0644"
+  loop: "{{ keepalived_instances }}"
+  loop_control:
+    label: "keepalived-watchdog@{{ item.name }}.timer"
+  when: item.watchdog_services | default([]) | length > 0
+  register: keepalived_watchdog_timer_units
+
+- name: "Reload systemd"
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: >-
+    keepalived_watchdog_service_units.changed | default(false) or
+    keepalived_watchdog_timer_units.changed | default(false)
+
+- name: "Enable watchdog timers"
+  ansible.builtin.systemd:
+    name: "keepalived-watchdog@{{ item.name }}.timer"
+    state: started
+    enabled: true
+  loop: "{{ keepalived_instances }}"
+  loop_control:
+    label: "keepalived-watchdog@{{ item.name }}.timer"
+  when: item.watchdog_services | default([]) | length > 0

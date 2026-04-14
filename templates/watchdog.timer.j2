@@ -1,0 +1,10 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Keepalived watchdog timer for {{ item.name }}
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec={{ item.watchdog_interval | default('5min') }}
+
+[Install]
+WantedBy=timers.target
