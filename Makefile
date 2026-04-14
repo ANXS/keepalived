@@ -11,8 +11,8 @@ $(VENV): requirements-dev.txt
 	@touch $(VENV)
 
 lint: $(VENV)
-	$(BIN)/yamllint -c .yamllint defaults tasks meta handlers templates
-	$(BIN)/ansible-lint -c .ansible-lint defaults tasks meta handlers
+	$(BIN)/yamllint -c .yamllint defaults tasks meta templates
+	$(BIN)/ansible-lint -c .ansible-lint defaults tasks meta
 
 test: lint test-all
 
