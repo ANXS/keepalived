@@ -3,7 +3,7 @@
   hosts: keepalived_nodes
   become: true
   roles:
-    - role: "anxs-keepalived"
+    - role: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') | basename }}"
       vars:
         keepalived_instances:
           - name: "test"
