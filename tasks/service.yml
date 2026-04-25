@@ -1,4 +1,19 @@
 ---
+- name: "Touch maint files for start_maint"
+  ansible.builtin.file:
+    path: "{{ item.maint_file }}"
+    state: touch
+    owner: root
+    group: root
+    mode: "0600"
+  loop: "{{ keepalived_instances }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - keepalived_start_maint | bool
+    - item.maint_file | default('') != ''
+  changed_when: false
+
 - name: "Ensure keepalived started"
   ansible.builtin.service:
     name: keepalived

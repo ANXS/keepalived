@@ -118,3 +118,11 @@
   loop_control:
     label: "keepalived-watchdog@{{ item.name }}.timer"
   when: item.watchdog_services | default([]) | length > 0
+
+- name: "Deploy status helper"
+  ansible.builtin.template:
+    src: "keepalived-status.sh.j2"
+    dest: "{{ keepalived_conf_dir }}/keepalived-status.sh"
+    owner: "root"
+    group: "{{ keepalived_script_group }}"
+    mode: "0755"

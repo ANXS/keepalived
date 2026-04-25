@@ -1,0 +1,50 @@
+#!/bin/bash
+# {{ ansible_managed }}
+# keepalived status helper -- outputs JSON for each VRRP instance
+
+set -e
+
+STATE_DIR="{{ keepalived_state_dir }}"
+CONF_DIR="{{ keepalived_conf_dir }}"
+
+json_instances=()
+
+{% for instance in keepalived_instances %}
+{
+    name="{{ instance.name }}"
+    state_file="${STATE_DIR}/${name}"
+    maint_file="{{ instance.maint_file | default('') }}"
+    priority="{{ instance.priority }}"
+    vip="{{ instance.vip }}"
+
+    state="unknown"
+    if [ -f "$state_file" ]; then
+        state="$(cat "$state_file")"
+    fi
+
+    maint="false"
+    if [ -n "$maint_file" ] && [ -f "$maint_file" ]; then
+        maint="true"
+    fi
+
+    has_vip="false"
+    if ip addr show 2>/dev/null | grep -q "${vip}"; then
+        has_vip="true"
+    fi
+
+    json_instances+=("{\"name\":\"${name}\",\"state\":\"${state}\",\"priority\":${priority},\"vip\":\"${vip}\",\"has_vip\":${has_vip},\"maint\":${maint}}")
+}
+{% endfor %}
+
+# join array
+printf '{"hostname":"'"$(hostname -f)"'","instances":['
+first=true
+for item in "${json_instances[@]}"; do
+    if [ "$first" = true ]; then
+        first=false
+    else
+        printf ','
+    fi
+    printf '%s' "$item"
+done
+printf ']}\n'

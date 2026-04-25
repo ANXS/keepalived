@@ -7,6 +7,10 @@ keepalived_enable_script_security: true
 keepalived_state_dir: "/var/run/keepalived"
 keepalived_conf_dir: "/etc/keepalived"
 
+# touch maint files before starting keepalived so it enters FAULT
+# on first deploy. prevents new hosts from preempting immediately.
+keepalived_start_maint: false
+
 # VRRP instances (list)
 keepalived_instances: []
 # Example:
