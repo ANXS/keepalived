@@ -15,7 +15,7 @@ keepalived_start_maint: false
 keepalived_instances: []
 # Example:
 #   - name: "dns"
-#     interface: "{{ ansible_default_ipv4.interface }}"
+#     interface: "{{ ansible_facts['default_ipv4']['interface'] }}"
 #     router_id: 1
 #     priority: 100
 #     state: "BACKUP"
