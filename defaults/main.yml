@@ -21,7 +21,8 @@ keepalived_instances: []
 #     state: "BACKUP"
 #     vip: "192.168.1.100"
 #     advert_int: 1
-#     preempt_delay: 30
+#     nopreempt: false       # retain the current healthy master after failover
+#     preempt_delay: 30      # used only when nopreempt is false
 #     use_vmac: false
 #     vmac_xmit_base: true   # send VRRP adverts on base interface (recommended)
 #     check_script: "/etc/keepalived/check_dns.sh"

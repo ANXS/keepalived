@@ -10,7 +10,7 @@ Ansible role for keepalived VRRP management. Supports multiple VRRP instances wi
 ## Requirements & Dependencies
 
 * Ansible 2.14 or higher.
-* Debian 12+ or Ubuntu 22.04+.
+* Debian 12+ or Ubuntu 20.04+.
 * `ansible.posix` collection (for the `sysctl` module).
 
 ## Variables
@@ -21,13 +21,14 @@ Some commonly adjusted variables. See [`defaults/main.yml`](https://github.com/A
 * `keepalived_check_scripts` (default `[]`) is a list of user-provided check script templates to render into the keepalived config directory.
 * Per-instance `builtin_checks` (DNS dig, HTTP health) lets instances opt into common health checks without shipping a custom script.
 * Per-instance `maint_file` enables a check wrapper that forces FAULT when the file exists, for graceful maintenance drains.
+* Per-instance `nopreempt` retains the current healthy master after failover instead of allowing a recovered higher-priority peer to trigger a second cutover. Instances using it must start in `BACKUP`.
 * Per-instance `watchdog_services` plus `watchdog_interval` deploys a systemd timer that reconciles service state against the current VRRP state.
 
 ## Testing
 
 Tests use [Molecule](https://github.com/ansible/molecule) with Docker and [Testinfra](https://testinfra.readthedocs.io/). Run the full suite with `make test`, or target a specific platform (e.g. `make test-debian12`). Scenarios spin up two containers with unicast VRRP so real failover can be exercised.
 
-The test suite verifies package installation and sysctl, config rendering across single-instance and multi-instance setups, notify script state transitions and state-file handling, check wrapper maintenance-mode logic, VIP convergence (master holds the VIP, backup does not), maintenance-triggered failover and preemption recovery, and idempotence. Tests run across Debian 12/13 and Ubuntu 22.04/24.04.
+The test suite verifies package installation and sysctl, config rendering across single-instance and multi-instance setups, notify script state transitions and state-file handling, check wrapper maintenance-mode logic, VIP convergence (master holds the VIP, backup does not), maintenance-triggered failover and preemption recovery, and idempotence. Tests run across Debian 12/13 and Ubuntu 20.04/22.04/24.04.
 
 ## Note on AI Usage
 

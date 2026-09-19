@@ -33,6 +33,8 @@ def test_keepalived_config_contains_instance(host):
     assert "vrrp_instance test" in content
     assert "172.28.0.10" in content
     assert "unicast_peer" in content
+    assert "nopreempt" in content
+    assert "preempt_delay" not in content
 
 
 def test_keepalived_config_global_defs(host):
@@ -78,12 +80,6 @@ def test_sysctl_nonlocal_bind(host):
 # --- Phase 6: VIP convergence and state ---
 
 
-def _is_master(host):
-    """Check if this node has 'node1' in hostname (priority 200)."""
-    hostname = host.check_output("hostname")
-    return "node1" in hostname
-
-
 def _has_vip(host):
     """Check if VIP 172.28.0.10 is present on any interface."""
     ip_output = host.check_output("ip addr show")
@@ -100,13 +96,14 @@ def _wait_for_vip(host, expected, timeout=15):
 
 
 def test_vip_initial_convergence(host):
-    """VIP lands on the higher-priority node after convergence."""
+    """The elected master owns the VIP and the backup does not."""
     # give keepalived time to settle
     time.sleep(5)
-    if _is_master(host):
-        assert _has_vip(host), "master (node1) should hold VIP"
+    state = host.file("/var/run/keepalived/test").content_string.strip()
+    if _has_vip(host):
+        assert state == "leader", "VIP owner should report leader state"
     else:
-        assert not _has_vip(host), "backup (node2) should not hold VIP"
+        assert state == "failover", "node without VIP should report failover state"
 
 
 def test_state_file_written(host):
@@ -115,16 +112,17 @@ def test_state_file_written(host):
     state_file = host.file("/var/run/keepalived/test")
     assert state_file.exists, "state file should exist after convergence"
     content = state_file.content_string.strip()
-    if _is_master(host):
-        assert content == "leader", "master state file should say 'leader'"
+    if _has_vip(host):
+        assert content == "leader", "VIP owner state file should say 'leader'"
     else:
-        assert content == "failover", "backup state file should say 'failover'"
+        assert content == "failover", \
+            "node without VIP state file should say 'failover'"
 
 
 def test_maintenance_mode_failover(host):
-    """Touching maint file on master causes VIP to migrate."""
-    if not _is_master(host):
-        # only run this test on the master node
+    """Non-preemptive failover retains the healthy backup after recovery."""
+    if not _has_vip(host):
+        # only run this test on the actually elected master
         return
 
     # enter maintenance mode
@@ -134,29 +132,24 @@ def test_maintenance_mode_failover(host):
     assert _wait_for_vip(host, False, timeout=15), \
         "VIP should leave master after maint file touched"
 
-    # clean up - remove maint file
+    # recover the higher-priority node, then wait beyond check recovery.
     host.run("rm -f /var/cache/keepalived-maint")
+    time.sleep(10)
 
-    # wait for preemption (preempt_delay=5 + rise=5 -> ~10s)
-    assert _wait_for_vip(host, True, timeout=20), \
-        "VIP should return to master after maint file removed"
+    assert not _has_vip(host), \
+        "recovered higher-priority node must not preempt the healthy master"
 
 
-def test_maintenance_mode_backup_gets_vip(host):
-    """Backup node receives VIP when master enters maintenance."""
-    if _is_master(host):
-        # only run this test on the backup node
+def test_recovered_former_master_stays_backup(host):
+    """The recovered former master remains backup after the failover cycle."""
+    if _has_vip(host):
+        # only inspect the node that does not own the VIP
         return
 
-    # master should have entered maint and come back by now
-    # (test_maintenance_mode_failover runs on node1 first)
-    # just verify backup is in a sane state
     state_file = host.file("/var/run/keepalived/test")
     assert state_file.exists
-    content = state_file.content_string.strip()
-    # after the full maint cycle, backup should be back to failover
-    assert content in ("leader", "failover"), \
-        "backup state should be leader or failover"
+    assert state_file.content_string.strip() == "failover", \
+        "node without VIP should remain in failover state"
 
 
 def test_check_wrapper_maint_logic(host):

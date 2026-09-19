@@ -29,7 +29,11 @@ vrrp_instance {{ instance.name }} {
     virtual_router_id {{ instance.router_id }}
     priority {{ instance.priority }}
     advert_int {{ instance.advert_int | default(1) }}
+{% if instance.nopreempt | default(false) %}
+    nopreempt
+{% else %}
     preempt_delay {{ instance.preempt_delay | default(30) }}
+{% endif %}
 {% if instance.use_vmac | default(false) %}
     use_vmac
 {% if instance.vmac_xmit_base | default(true) %}

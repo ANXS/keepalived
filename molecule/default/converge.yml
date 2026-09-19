@@ -13,7 +13,7 @@
             state: "BACKUP"
             vip: "172.28.0.10"
             advert_int: 1
-            preempt_delay: 5
+            nopreempt: true
             use_vmac: false
             maint_file: "/var/cache/keepalived-maint"
             unicast_peers: "{{ groups['keepalived_nodes'] | map('extract', hostvars, ['ansible_facts', 'default_ipv4']) | map(attribute='address') | reject('equalto', ansible_facts['default_ipv4']['address']) | list }}"
