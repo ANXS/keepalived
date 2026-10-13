@@ -1,0 +1,12 @@
+---
+- name: "converge keepalived nodes (vmac + garp refresh)"
+  hosts: keepalived_nodes
+  become: true
+  pre_tasks:
+    - name: "Load shared vmac instance definitions"
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/instances.yml"
+  roles:
+    - role: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') | basename }}"
+      vars:
+        keepalived_instances: "{{ vmac_instances }}"

@@ -1,4 +1,5 @@
-.PHONY: lint test test-debian12 test-debian13 test-ubuntu2004 test-ubuntu2204 test-ubuntu2404 test-all clean distclean
+.PHONY: lint test test-debian12 test-debian13 test-ubuntu2004 test-ubuntu2204 test-ubuntu2404 test-vmac test-all \
+	converge-vmac verify-vmac destroy-vmac clean distclean
 
 VENV := .venv
 BIN := $(VENV)/bin
@@ -41,7 +42,25 @@ test-ubuntu2204: $(VENV)
 		MOLECULE_IMAGE=geerlingguy/docker-ubuntu2204-ansible:latest \
 		$(BIN)/molecule test
 
-test-all: test-debian12 test-debian13 test-ubuntu2004 test-ubuntu2204 test-ubuntu2404
+test-vmac: $(VENV)
+	MOLECULE_OS=debian MOLECULE_VERSION=12 \
+		MOLECULE_IMAGE=geerlingguy/docker-debian12-ansible:latest \
+		$(BIN)/molecule test -s vmac
+
+converge-vmac: $(VENV)
+	MOLECULE_OS=debian MOLECULE_VERSION=12 \
+		MOLECULE_IMAGE=geerlingguy/docker-debian12-ansible:latest \
+		$(BIN)/molecule converge -s vmac
+
+verify-vmac: $(VENV)
+	MOLECULE_OS=debian MOLECULE_VERSION=12 \
+		MOLECULE_IMAGE=geerlingguy/docker-debian12-ansible:latest \
+		$(BIN)/molecule verify -s vmac
+
+destroy-vmac: $(VENV)
+	$(BIN)/molecule destroy -s vmac
+
+test-all: test-debian12 test-debian13 test-ubuntu2004 test-ubuntu2204 test-ubuntu2404 test-vmac
 
 converge: $(VENV)
 	MOLECULE_OS=debian MOLECULE_VERSION=12 \

@@ -1,0 +1,218 @@
+---
+# Two things the rendered config cannot answer: that the validation gate
+# refuses a bad config instead of shipping it -- leaving the working config and
+# the running process untouched -- and how long the VIP is unreachable when
+# keepalived is restarted on one node at a time.
+- name: "side effects: refuse a bad config, then measure single-node restart cost"
+  hosts: keepalived_nodes
+  become: true
+  tasks:
+    - name: "Load shared vmac instance definitions"
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/instances.yml"
+
+    # ---------- experiment 1: a bad config must be refused ----------
+
+    - name: "checksum the known-good config"
+      ansible.builtin.stat:
+        path: "/etc/keepalived/keepalived.conf"
+      register: conf_before
+
+    - name: "record the running keepalived process"
+      ansible.builtin.command:
+        cmd: "systemctl show --property=MainPID --property=ActiveState --value keepalived"
+      register: svc_before
+      changed_when: false
+
+    - name: "attempt to converge an invalid garp_master_refresh"
+      block:
+        - name: "re-run the role with one invalid directive value"
+          ansible.builtin.include_role:
+            name: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') | basename }}"
+          vars:
+            keepalived_instances: "{{ vmac_bad_instances }}"
+
+        - name: "the gate did not fire"
+          ansible.builtin.set_fact:
+            gate_fired: false
+      rescue:
+        - name: "the gate fired"
+          ansible.builtin.set_fact:
+            gate_fired: true
+            gate_msg: "{{ ansible_failed_result.msg | default('') }}"
+            gate_rc: "{{ ansible_failed_result.exit_status | default('') }}"
+            gate_said: >-
+              {{ (ansible_failed_result.stderr | default('')
+                  ~ ' ' ~ ansible_failed_result.stdout | default(''))
+                 | replace('\n', ' / ') }}
+
+    - name: "the role must have refused the invalid value"
+      ansible.builtin.assert:
+        that:
+          - gate_fired | bool
+        fail_msg: >-
+          VALIDATION GATE DID NOT FIRE: the role accepted
+          garp_master_refresh 'bogus' and shipped it to disk.
+        success_msg: "the role refused the invalid value"
+
+    - name: "the refusal must come from config validation, quoting keepalived"
+      ansible.builtin.assert:
+        that:
+          - "'failed to validate' in gate_msg"
+          - "'garp_master_refresh' in gate_said"
+        fail_msg: >-
+          the role failed for some reason other than the config-test gate.
+          msg={{ gate_msg }} validator_output={{ gate_said }}
+        success_msg: "keepalived rejected it: {{ gate_said | trim }}"
+
+    - name: "re-checksum the config after the refused run"
+      ansible.builtin.stat:
+        path: "/etc/keepalived/keepalived.conf"
+      register: conf_after
+
+    - name: "the previously working config must be untouched"
+      ansible.builtin.assert:
+        that:
+          - conf_after.stat.checksum == conf_before.stat.checksum
+        fail_msg: >-
+          the rejected config REACHED DISK: checksum changed from
+          {{ conf_before.stat.checksum }} to {{ conf_after.stat.checksum }}
+        success_msg: "the good config is still on disk, byte for byte"
+
+    - name: "re-read the keepalived process"
+      ansible.builtin.command:
+        cmd: "systemctl show --property=MainPID --property=ActiveState --value keepalived"
+      register: svc_after
+      changed_when: false
+
+    - name: "keepalived must still be running, same process, never restarted"
+      ansible.builtin.assert:
+        that:
+          - "'active' in svc_after.stdout"
+          - svc_after.stdout == svc_before.stdout
+        fail_msg: >-
+          keepalived was disturbed by the rejected config.
+          before={{ svc_before.stdout_lines }} after={{ svc_after.stdout_lines }}
+        success_msg: "keepalived untouched: {{ svc_after.stdout_lines }}"
+
+    - name: "record the refusal for the verifier"
+      ansible.builtin.copy:
+        dest: "/var/run/keepalived/bad_config_refused"
+        owner: "root"
+        group: "root"
+        mode: "0644"
+        content: |
+          gate_fired={{ gate_fired }}
+          validator_rc={{ gate_rc }}
+          keepalived_said={{ gate_said | trim }}
+          config_unchanged={{ conf_after.stat.checksum == conf_before.stat.checksum }}
+          service_unchanged={{ svc_after.stdout == svc_before.stdout }}
+
+    # ---------- experiment 2: single-node restart blast radius ----------
+
+    # Restarting the node that does NOT hold the VIP should cost nothing.
+    - name: "measure a restart of the node without the VIP"
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/measure_gap.yml"
+      vars:
+        gap_phase: "backup_restart"
+        gap_restart_vip_owner: false
+        gap_max_seconds: 1.0
+
+    # The peer keeps the VIP afterwards: with nopreempt the restarted node
+    # comes back as BACKUP and does not take it again.
+    - name: "measure a restart of the node holding the VIP"
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/measure_gap.yml"
+      vars:
+        gap_phase: "master_restart"
+        gap_restart_vip_owner: true
+        gap_max_seconds: 15.0
+
+    # ---------- hand the VIP back, deliberately ----------
+
+    # Hand the VIP back the only way nopreempt allows: drain whoever holds it.
+    # This also gives verify a known owner -- pytest groups tests by host, so a
+    # verifier guessing who holds the VIP silently skips its strongest test.
+    - name: "note who holds the VIP and who has the higher priority"
+      ansible.builtin.command:
+        cmd: "ip -o -4 addr show"
+      register: handoff_before
+      changed_when: false
+
+    - name: "record the handoff roles"
+      ansible.builtin.set_fact:
+        handoff_is_high: "{{ 'node1' in inventory_hostname }}"
+        handoff_held_vip: "{{ vmac_vip in handoff_before.stdout }}"
+        handoff_vip_lines: >-
+          {{ handoff_before.stdout_lines
+             | select('search', vmac_vip ~ '/') | list }}
+
+    # On the node that ACQUIRED the VIP during the restart above, this proves a
+    # vmac VIP can be picked up on failover, not merely held from startup.
+    - name: "record the interface carrying the VIP"
+      ansible.builtin.set_fact:
+        handoff_iface: >-
+          {{ (handoff_vip_lines | first).split()[1]
+             if handoff_vip_lines | length > 0 else 'none' }}
+
+    - name: "drain the lower-priority holder"
+      ansible.builtin.file:
+        path: "{{ vmac_instances[0].maint_file }}"
+        state: touch
+        owner: "root"
+        group: "root"
+        mode: "0600"
+      when:
+        - handoff_held_vip | bool
+        - not handoff_is_high | bool
+      changed_when: false
+
+    - name: "wait for the handover"
+      ansible.builtin.pause:
+        seconds: 10
+
+    - name: "end the drain"
+      ansible.builtin.file:
+        path: "{{ vmac_instances[0].maint_file }}"
+        state: absent
+      when:
+        - handoff_held_vip | bool
+        - not handoff_is_high | bool
+      changed_when: false
+
+    - name: "let the drained node recover as backup"
+      ansible.builtin.pause:
+        seconds: 12
+
+    - name: "re-read the addresses"
+      ansible.builtin.command:
+        cmd: "ip -o -4 addr show"
+      register: handoff_after
+      changed_when: false
+
+    - name: "the higher-priority node must hold the VIP after the drain"
+      ansible.builtin.assert:
+        that:
+          - (vmac_vip in handoff_after.stdout) == (handoff_is_high | bool)
+        fail_msg: >-
+          the deliberate drain did not put {{ vmac_vip }} back on the
+          higher-priority node. is_high={{ handoff_is_high }}
+          holds_now={{ vmac_vip in handoff_after.stdout }}
+        success_msg: >-
+          {{ vmac_vip }} is where it should be
+          (is_high={{ handoff_is_high }})
+
+    - name: "record the handoff for the verifier"
+      ansible.builtin.copy:
+        dest: "/var/run/keepalived/vip_handoff"
+        owner: "root"
+        group: "root"
+        mode: "0644"
+        content: |
+          is_high_priority={{ handoff_is_high }}
+          held_vip_before_drain={{ handoff_held_vip }}
+          vip_iface_before_drain={{ handoff_iface | trim }}
+          holds_vip_now={{ vmac_vip in handoff_after.stdout }}
+          owner_is_high_priority={{
+            (vmac_vip in handoff_after.stdout) == (handoff_is_high | bool) }}

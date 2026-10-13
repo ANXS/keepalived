@@ -1,0 +1,129 @@
+---
+# Tasks file, not a playbook. Measures how long the VIP is unreachable while
+# keepalived restarts on exactly ONE node. A prober runs on both nodes, but
+# only the node that was NOT restarted asserts: it is the only vantage point
+# that represents a client.
+# Caller must set: gap_phase, gap_restart_vip_owner, gap_max_seconds.
+- name: "({{ gap_phase }}) current addresses"
+  ansible.builtin.command:
+    cmd: "ip -o -4 addr show"
+  register: gap_addrs
+  changed_when: false
+
+- name: "({{ gap_phase }}) note VIP ownership and who gets restarted"
+  ansible.builtin.set_fact:
+    gap_holds_vip: "{{ vmac_vip in gap_addrs.stdout }}"
+    gap_restarted_here: >-
+      {{ (vmac_vip in gap_addrs.stdout) == (gap_restart_vip_owner | bool) }}
+
+# ping deadline 0.3s (iputils accepts a fractional -W; verified in these
+# containers), sampled every 0.1s, so the gap resolution is ~0.4s.
+- name: "({{ gap_phase }}) start the VIP prober on every node"
+  ansible.builtin.shell:
+    cmd: |
+      out=/tmp/vipprobe-{{ gap_phase }}.log
+      : > "$out"
+      end=$(( $(date +%s) + 25 ))
+      while [ "$(date +%s)" -lt "$end" ] ; do
+        if ping -c 1 -W 0.3 {{ vmac_vip }} > /dev/null 2>&1 ; then
+          echo "$(date +%s.%N) up" >> "$out"
+        else
+          echo "$(date +%s.%N) down" >> "$out"
+        fi
+        sleep 0.1
+      done
+    executable: "/bin/bash"
+  async: 90
+  poll: 0
+  changed_when: false
+
+- name: "({{ gap_phase }}) let the probers get going"
+  ansible.builtin.pause:
+    seconds: 3
+
+- name: "({{ gap_phase }}) restart keepalived on exactly one node"
+  ansible.builtin.systemd:
+    name: "keepalived"
+    state: restarted
+  when: gap_restarted_here | bool
+
+- name: "({{ gap_phase }}) wait for the probe window to close"
+  ansible.builtin.pause:
+    seconds: 24
+
+- name: "({{ gap_phase }}) total samples"
+  ansible.builtin.shell:
+    cmd: "wc -l < /tmp/vipprobe-{{ gap_phase }}.log"
+  register: gap_total
+  changed_when: false
+
+- name: "({{ gap_phase }}) unreachable samples"
+  ansible.builtin.shell:
+    cmd: "grep -c ' down$' /tmp/vipprobe-{{ gap_phase }}.log || true"
+  register: gap_down
+  changed_when: false
+
+# Deliberately one physical line: a folded scalar keeps the newline before a
+# more-indented continuation, and the shell then tries to execute the log file.
+- name: "({{ gap_phase }}) seconds between first and last unreachable sample"
+  ansible.builtin.shell:
+    cmd: "awk '$2 == \"down\" { if (first == \"\") first = $1; last = $1 } END { printf \"%.2f\", (first == \"\" ? 0 : last - first) }' /tmp/vipprobe-{{ gap_phase }}.log"
+  register: gap_seconds
+  changed_when: false
+
+- name: "({{ gap_phase }}) final sample"
+  ansible.builtin.shell:
+    cmd: "tail -n 1 /tmp/vipprobe-{{ gap_phase }}.log"
+  register: gap_last
+  changed_when: false
+
+- name: "({{ gap_phase }}) report the measurement"
+  ansible.builtin.debug:
+    msg: >-
+      VIP-GAP phase={{ gap_phase }} host={{ inventory_hostname }}
+      held_vip_before={{ gap_holds_vip }}
+      restarted_here={{ gap_restarted_here }}
+      samples={{ gap_total.stdout | trim }}
+      unreachable={{ gap_down.stdout | trim }}
+      gap_seconds={{ gap_seconds.stdout | trim }}
+      final_sample={{ gap_last.stdout | trim }}
+
+- name: "({{ gap_phase }}) record the measurement for the verifier"
+  ansible.builtin.copy:
+    dest: "/var/run/keepalived/vip_gap_{{ gap_phase }}"
+    owner: "root"
+    group: "root"
+    mode: "0644"
+    content: |
+      phase={{ gap_phase }}
+      held_vip_before={{ gap_holds_vip }}
+      restarted_here={{ gap_restarted_here }}
+      samples={{ gap_total.stdout | trim }}
+      unreachable={{ gap_down.stdout | trim }}
+      gap_seconds={{ gap_seconds.stdout | trim }}
+      final_sample={{ gap_last.stdout | trim }}
+
+# Peer's vantage point only: the restarted node's own view is distorted by
+# keepalived rebuilding the nftables rules that accompany use_vmac.
+- name: "({{ gap_phase }}) the VIP must be reachable again when the window closes"
+  ansible.builtin.assert:
+    that:
+      - "' up' in gap_last.stdout"
+    fail_msg: >-
+      {{ vmac_vip }} was STILL unreachable from {{ inventory_hostname }} at the
+      end of the {{ gap_phase }} window (final sample: {{ gap_last.stdout | trim }})
+    success_msg: "{{ vmac_vip }} reachable again from {{ inventory_hostname }}"
+  when: not gap_restarted_here | bool
+
+- name: "({{ gap_phase }}) the outage must stay inside its budget"
+  ansible.builtin.assert:
+    that:
+      - (gap_seconds.stdout | trim | float) <= (gap_max_seconds | float)
+    fail_msg: >-
+      {{ vmac_vip }} was unreachable from {{ inventory_hostname }} for
+      {{ gap_seconds.stdout | trim }}s during {{ gap_phase }}, budget is
+      {{ gap_max_seconds }}s
+    success_msg: >-
+      {{ gap_phase }} outage {{ gap_seconds.stdout | trim }}s within
+      {{ gap_max_seconds }}s budget
+  when: not gap_restarted_here | bool

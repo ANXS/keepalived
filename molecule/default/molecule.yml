@@ -57,6 +57,10 @@ provisioner:
 
 verifier:
   name: testinfra
+  # Name every test in the output. A test that silently fails to collect is
+  # indistinguishable from a passing one in a dot-per-test run.
+  options:
+    v: true
 
 scenario:
   test_sequence:

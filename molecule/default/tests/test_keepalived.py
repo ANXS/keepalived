@@ -45,6 +45,43 @@ def test_keepalived_config_global_defs(host):
     assert "enable_script_security" in content
 
 
+def test_garp_master_refresh_absent_when_unset(host):
+    """Neither garp directive is emitted when the instance does not set them.
+
+    Keeps the rendered config byte-identical for consumers that never
+    configure them.
+    """
+    content = host.file("/etc/keepalived/keepalived.conf").content_string
+    assert "garp_master_refresh" not in content, (
+        "garp_master_refresh was rendered without being configured -- "
+        "existing consumers would get a changed config:\n" + content
+    )
+    assert "garp_master_refresh_repeat" not in content, \
+        "garp_master_refresh_repeat was rendered without being configured"
+
+
+def test_vmac_directives_absent_when_disabled(host):
+    """use_vmac false emits neither use_vmac nor vmac_xmit_base.
+
+    vmac_xmit_base defaults to true, so only its nesting inside the use_vmac
+    branch keeps it out.
+    """
+    content = host.file("/etc/keepalived/keepalived.conf").content_string
+    assert "use_vmac" not in content, \
+        "use_vmac rendered even though the instance sets it false"
+    assert "vmac_xmit_base" not in content, \
+        "vmac_xmit_base rendered outside the use_vmac branch"
+
+
+def test_rendered_config_passes_keepalived_config_test(host):
+    """keepalived's own parser accepts the config the role shipped."""
+    result = host.run("keepalived -t -f /etc/keepalived/keepalived.conf")
+    assert result.rc == 0, (
+        "keepalived --config-test rejected the shipped config:\n"
+        + result.stdout + result.stderr
+    )
+
+
 def test_notify_script_deployed(host):
     """notify script is deployed with correct permissions."""
     script = host.file("/etc/keepalived/notify_test.sh")

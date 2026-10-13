@@ -1,0 +1,81 @@
+---
+# Vars file, not a playbook. converge.yml and side_effect.yml share it so the
+# bad-config experiment mutates exactly ONE value away from the shape that
+# converged. The VIPs derive from each node's own address because docker picks
+# this scenario's subnet; both nodes sit on the same /24.
+vmac_net_prefix: "{{ ansible_facts['default_ipv4']['address'].split('.')[0:3] | join('.') }}"
+vmac_vip: "{{ vmac_net_prefix }}.250"
+vmac_preempt_vip: "{{ vmac_net_prefix }}.251"
+vmac_peers: >-
+  {{ groups['keepalived_nodes']
+     | map('extract', hostvars, ['ansible_facts', 'default_ipv4'])
+     | map(attribute='address')
+     | reject('equalto', ansible_facts['default_ipv4']['address'])
+     | list }}
+
+# keepalived reports this value as "- ignoring" and would start happily
+# WITHOUT the directive, so the gate catches silent degradation, not a crash.
+vmac_bad_instances: >-
+  {{ [vmac_instances[0] | combine({'garp_master_refresh': 'bogus'})]
+     + vmac_instances[1:] }}
+
+vmac_instances:
+  - name: "vmac"
+    interface: "eth0"
+    router_id: 51
+    priority: "{{ 200 if 'node1' in inventory_hostname else 100 }}"
+    state: "BACKUP"
+    vip: "{{ vmac_vip }}"
+    advert_int: 1
+    nopreempt: true
+    use_vmac: true
+    vmac_xmit_base: true
+    # Far below any sane real value, so a test run sees several refreshes.
+    garp_master_refresh: 7
+    garp_master_refresh_repeat: 2
+    maint_file: "/var/cache/keepalived-vmac-maint"
+    unicast_peers: "{{ vmac_peers }}"
+    # No check_script, so the wrapper keepalived tracks execs nothing: these
+    # checks render but do not gate VRRP. Instance 2 wires one in.
+    builtin_checks:
+      dns_dig: true
+      dns_dig_host: "vip-check.molecule.test"
+      http_health: true
+      http_health_url: "http://127.0.0.1:8080/health"
+      http_health_timeout: 0.2
+    notify_actions:
+      master:
+        - "touch /var/run/keepalived/vmac_master_action"
+      backup:
+        - "touch /var/run/keepalived/vmac_backup_action"
+      fault:
+        - "touch /var/run/keepalived/vmac_fault_action"
+
+  # Covers what instance 1 cannot: nopreempt false (so preempt_delay renders),
+  # garp_master_refresh unset, and a builtin check wired in via check_script.
+  - name: "preempt"
+    interface: "eth0"
+    router_id: 52
+    priority: "{{ 200 if 'node1' in inventory_hostname else 100 }}"
+    state: "BACKUP"
+    vip: "{{ vmac_preempt_vip }}"
+    advert_int: 1
+    nopreempt: false
+    preempt_delay: 5
+    use_vmac: false
+    maint_file: "/var/cache/keepalived-preempt-maint"
+    check_script: "/etc/keepalived/check_builtin_preempt.sh"
+    check_interval: 1
+    check_timeout: 2
+    check_fall: 2
+    check_rise: 2
+    unicast_peers: "{{ vmac_peers }}"
+    builtin_checks:
+      http_health: true
+      http_health_url: "http://127.0.0.1:8080/health"
+      http_health_timeout: 1
+    notify_actions:
+      master:
+        - "touch /var/run/keepalived/preempt_master_action"
+      backup: []
+      fault: []

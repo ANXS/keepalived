@@ -1,0 +1,78 @@
+---
+# Covers use_vmac + vmac_xmit_base, garp_master_refresh, populated
+# builtin_checks and notify_actions, and the nopreempt-false + preempt_delay
+# path. No etc_hosts block: this scenario gets its own docker network, so node
+# and VIP addresses are derived from facts rather than hardcoded.
+dependency:
+  name: shell
+  command: "true"
+
+driver:
+  name: docker
+
+platforms:
+  - name: "keepalived-vmac-node1-${MOLECULE_OS:-debian}-${MOLECULE_VERSION:-12}"
+    image: "${MOLECULE_IMAGE:-geerlingguy/docker-debian12-ansible:latest}"
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    privileged: true
+    pre_build_image: true
+    cgroupns_mode: host
+    command: ${MOLECULE_DOCKER_COMMAND:-""}
+    capabilities:
+      - NET_ADMIN
+      - NET_BROADCAST
+      - NET_RAW
+    networks:
+      - name: keepalived-vmac-test
+    docker_networks:
+      - name: keepalived-vmac-test
+        driver: bridge
+    groups:
+      - keepalived_nodes
+  - name: "keepalived-vmac-node2-${MOLECULE_OS:-debian}-${MOLECULE_VERSION:-12}"
+    image: "${MOLECULE_IMAGE:-geerlingguy/docker-debian12-ansible:latest}"
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    privileged: true
+    pre_build_image: true
+    cgroupns_mode: host
+    command: ${MOLECULE_DOCKER_COMMAND:-""}
+    capabilities:
+      - NET_ADMIN
+      - NET_BROADCAST
+      - NET_RAW
+    networks:
+      - name: keepalived-vmac-test
+    groups:
+      - keepalived_nodes
+
+provisioner:
+  name: ansible
+  config_options:
+    defaults:
+      remote_tmp: /tmp/.ansible-${USER}/tmp/
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/..:${HOME}/.ansible/roles"
+
+verifier:
+  name: testinfra
+  # Name every test in the output. A test that silently fails to collect is
+  # indistinguishable from a passing one in a dot-per-test run.
+  options:
+    v: true
+
+scenario:
+  test_sequence:
+    - dependency
+    - cleanup
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - idempotence
+    - side_effect
+    - verify
+    - cleanup
+    - destroy

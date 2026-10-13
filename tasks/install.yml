@@ -18,3 +18,54 @@
     owner: "root"
     group: "root"
     mode: "0755"
+
+# keepalived 2.0.19 rejects max_auto_priority as an unknown keyword, 2.2.7
+# accepts it. Probe the binary rather than keep a version table, and conclude
+# "unsupported" only when the control probe PASSES and the keyword probe FAILS,
+# so an unrelated validator failure cannot silently strip the directive.
+- name: "Stage config-test probes"
+  ansible.builtin.copy:
+    dest: "/tmp/{{ item.name }}"
+    content: "{{ item.content }}"
+    owner: "root"
+    group: "root"
+    mode: "0600"
+  loop:
+    - name: ".keepalived-probe-control.conf"
+      content: "global_defs {\n}\n"
+    - name: ".keepalived-probe-max-auto-priority.conf"
+      content: "global_defs {\n    max_auto_priority\n}\n"
+  loop_control:
+    label: "{{ item.name }}"
+  changed_when: false
+  check_mode: false
+  when: keepalived_validate_config | bool
+
+- name: "Probe which global_defs options this keepalived accepts"
+  ansible.builtin.command:
+    cmd: "{{ keepalived_config_test_cmd | replace('%s', '/tmp/' + item) }}"
+  register: keepalived_probes
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  loop:
+    - ".keepalived-probe-control.conf"
+    - ".keepalived-probe-max-auto-priority.conf"
+  when: keepalived_validate_config | bool
+
+- name: "Record max_auto_priority support"
+  ansible.builtin.set_fact:
+    keepalived_supports_max_auto_priority: >-
+      {{ not (keepalived_probes.results[0].rc == 0
+              and keepalived_probes.results[1].rc != 0) }}
+  when: keepalived_validate_config | bool
+
+- name: "Remove the config-test probes"
+  ansible.builtin.file:
+    path: "/tmp/{{ item }}"
+    state: absent
+  loop:
+    - ".keepalived-probe-control.conf"
+    - ".keepalived-probe-max-auto-priority.conf"
+  changed_when: false
+  when: keepalived_validate_config | bool

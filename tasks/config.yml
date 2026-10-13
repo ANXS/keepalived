@@ -1,4 +1,7 @@
 ---
+# validate runs against the TEMPORARY file, so a rejected config never reaches
+# keepalived_conf_dir and the daemon keeps the VIP. --config-test also exits
+# non-zero on values keepalived would merely warn about and ignore.
 - name: "Render keepalived configuration"
   ansible.builtin.template:
     src: "keepalived.conf.j2"
@@ -6,4 +9,15 @@
     owner: "root"
     group: "root"
     mode: "0644"
+    validate: "{{ keepalived_config_test_cmd if keepalived_validate_config | bool else omit }}"
   register: keepalived_config
+
+# the validate above only fires when the rendered content CHANGES, so a config
+# broken out of band would be restarted into. this runs every time, before
+# service.yml can restart.
+- name: "Validate on-disk keepalived configuration"
+  ansible.builtin.command:
+    cmd: "{{ keepalived_config_test_cmd | replace('%s', keepalived_conf_dir + '/keepalived.conf') }}"
+  register: keepalived_config_test
+  changed_when: false
+  when: keepalived_validate_config | bool

@@ -19,6 +19,8 @@ Some commonly adjusted variables. See [`defaults/main.yml`](https://github.com/A
 
 * `keepalived_instances` (default `[]`) is the list of VRRP instance definitions. Each entry specifies `name`, `interface`, `router_id`, `priority`, `vip`, plus optional health check, notify action, unicast peer, and watchdog settings.
 * `keepalived_check_scripts` (default `[]`) is a list of user-provided check script templates to render into the keepalived config directory.
+* `keepalived_validate_config` (default `true`) runs the rendered config through keepalived's own parser before it may replace the live file, and again before any restart. A config that fails never reaches `/etc/keepalived`, nothing is restarted, and the play fails with keepalived's own diagnostics. `keepalived_config_test_cmd` (default `keepalived -t -f %s`) is the command used, where `%s` is the file under test.
+* Per-instance `garp_master_refresh` (and `garp_master_refresh_repeat`) re-sends gratuitous ARP for the VIP every N seconds while this node is master. keepalived GARPs only on a VRRP transition, so with `use_vmac` and `nopreempt` nothing refreshes the upstream IP-to-MAC mapping and the VIP black-holes once it ages out of the gateway's ARP cache. Set it well below the shortest upstream ARP cache timeout. Both keys are unset by default and render nothing unless set.
 * Per-instance `builtin_checks` (DNS dig, HTTP health) lets instances opt into common health checks without shipping a custom script.
 * Per-instance `maint_file` enables a check wrapper that forces FAULT when the file exists, for graceful maintenance drains.
 * Per-instance `nopreempt` retains the current healthy master after failover instead of allowing a recovered higher-priority peer to trigger a second cutover. Instances using it must start in `BACKUP`.
@@ -28,7 +30,10 @@ Some commonly adjusted variables. See [`defaults/main.yml`](https://github.com/A
 
 Tests use [Molecule](https://github.com/ansible/molecule) with Docker and [Testinfra](https://testinfra.readthedocs.io/). Run the full suite with `make test`, or target a specific platform (e.g. `make test-debian12`). Scenarios spin up two containers with unicast VRRP so real failover can be exercised.
 
-The test suite verifies package installation and sysctl, config rendering across single-instance and multi-instance setups, notify script state transitions and state-file handling, check wrapper maintenance-mode logic, VIP convergence (master holds the VIP, backup does not), maintenance-triggered failover and preemption recovery, and idempotence. Tests run across Debian 12/13 and Ubuntu 20.04/22.04/24.04.
+There are two scenarios:
+
+* `molecule/default` covers the simple shape: one instance, `use_vmac: false`, no builtin checks, no notify actions. It verifies package installation and sysctl, config rendering, notify script state transitions and state-file handling, check wrapper maintenance-mode logic, VIP convergence (master holds the VIP, backup does not), maintenance-triggered failover and preemption recovery, and idempotence. It also asserts the optional directives are ABSENT when unset, which keeps the rendered config byte-identical for consumers that do not use them. Runs across Debian 12/13 and Ubuntu 20.04/22.04/24.04.
+* `molecule/vmac` (`make test-vmac`) covers `use_vmac` with `vmac_xmit_base`, `garp_master_refresh`, populated `builtin_checks` and `notify_actions`, plus a second instance on the `nopreempt: false` + `preempt_delay` path. It asks the running daemon what it actually parsed (via its SIGUSR1 data dump) rather than trusting the rendered text, proves an invalid config is refused rather than shipped (the previous config stays on disk and keepalived is not restarted), and measures how long the VIP is unreachable when keepalived is restarted on one node at a time.
 
 ## Note on AI Usage
 

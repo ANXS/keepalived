@@ -5,7 +5,9 @@ global_defs {
 {% if keepalived_enable_script_security %}
     enable_script_security
 {% endif %}
+{% if keepalived_supports_max_auto_priority | default(true) %}
     max_auto_priority
+{% endif %}
     vrrp_no_swap
     checker_no_swap
 }
@@ -39,6 +41,12 @@ vrrp_instance {{ instance.name }} {
 {% if instance.vmac_xmit_base | default(true) %}
     vmac_xmit_base
 {% endif %}
+{% endif %}
+{% if instance.garp_master_refresh | default('') != '' %}
+    garp_master_refresh {{ instance.garp_master_refresh }}
+{% endif %}
+{% if instance.garp_master_refresh_repeat | default('') != '' %}
+    garp_master_refresh_repeat {{ instance.garp_master_refresh_repeat }}
 {% endif %}
 
     virtual_ipaddress {

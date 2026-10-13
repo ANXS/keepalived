@@ -1,0 +1,72 @@
+---
+- name: "Prepare nodes for keepalived vmac testing"
+  hosts: keepalived_nodes
+  become: true
+  tasks:
+    - name: "Update apt cache"
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: "Install test dependencies"
+      ansible.builtin.apt:
+        pkg:
+          # shellcheck lints the rendered scripts, curl backs the http_health
+          # builtin check, iputils-ping probes the VIP from the peer node.
+          - "shellcheck"
+          - "curl"
+          - "iputils-ping"
+        state: present
+
+    - name: "Create health endpoint document root"
+      ansible.builtin.file:
+        path: "/var/www/molecule-health"
+        state: directory
+        owner: "root"
+        group: "root"
+        mode: "0755"
+
+    - name: "Create health endpoint body"
+      ansible.builtin.copy:
+        content: "ok\n"
+        dest: "/var/www/molecule-health/health"
+        owner: "root"
+        group: "root"
+        mode: "0644"
+
+    # The http_health builtin check needs something that really answers 200.
+    # A stdlib http.server under systemd is the fewest moving parts that works
+    # identically on every distro in the matrix.
+    - name: "Install health endpoint unit"
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/molecule-health.service"
+        owner: "root"
+        group: "root"
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=molecule http health endpoint
+          After=network.target
+
+          [Service]
+          ExecStart=/usr/bin/python3 -m http.server 8080 --directory /var/www/molecule-health
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: "Start health endpoint"
+      ansible.builtin.systemd:
+        name: "molecule-health.service"
+        state: started
+        enabled: true
+        daemon_reload: true
+
+    - name: "Wait for health endpoint"
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:8080/health"
+        status_code: 200
+      register: keepalived_health_probe
+      until: keepalived_health_probe.status | default(0) == 200
+      retries: 15
+      delay: 1
