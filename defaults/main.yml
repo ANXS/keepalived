@@ -36,6 +36,11 @@ keepalived_instances: []
 #     # set well below the shortest upstream ARP cache timeout.
 #     garp_master_refresh: 60        # seconds between gratuitous ARP refreshes while master
 #     garp_master_refresh_repeat: 2  # gratuitous ARPs sent per refresh (keepalived default 1)
+#     # while BACKUP or FAULT, drop every frame leaving the virtual MAC
+#     # interface (vrrp.<router_id>) and clear its multicast flag, so no
+#     # process on this host can move the VIP's MAC to the backup's switch
+#     # port. requires use_vmac and vmac_xmit_base; installs nftables.
+#     vmac_quiet_backup: false
 #     check_script: "/etc/keepalived/check_dns.sh"
 #     check_interval: 1
 #     check_timeout: 2

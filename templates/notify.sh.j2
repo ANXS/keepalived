@@ -36,6 +36,13 @@ esac
 STATE_FILE="${STATE_DIR}/{{ item.name }}"
 echo "$STATE" > "$STATE_FILE"
 chmod 644 "$STATE_FILE"
+{% if item.vmac_quiet_backup | default(false) %}
+
+# Before any user action: a new MASTER's egress opens first, a new BACKUP's
+# closes first.
+log "running: vmac_quiet_{{ item.name }}.sh ${TARGET_STATE}"
+"{{ keepalived_conf_dir }}/vmac_quiet_{{ item.name }}.sh" "$TARGET_STATE" || log "action failed: vmac_quiet_{{ item.name }}.sh ${TARGET_STATE}"
+{% endif %}
 
 {% for state_key in ['master', 'backup', 'fault'] %}
 {% set actions = item.notify_actions | default({}) %}

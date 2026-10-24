@@ -1,0 +1,75 @@
+#!/bin/bash
+# {{ ansible_managed }}
+# Quiet the virtual MAC interface of VRRP instance {{ item.name }} while this
+# node is not MASTER. A BACKUP that transmits anything from the virtual MAC
+# moves the VIP's MAC to its own switch port and black-holes the VIP until the
+# MASTER transmits again. Requires vmac_xmit_base: VRRP itself then never uses
+# this interface, so nothing legitimate leaves it in BACKUP or FAULT.
+
+set -euo pipefail
+
+VMAC_IF="vrrp.{{ item.router_id }}"
+STATE_FILE="{{ keepalived_state_dir }}/{{ item.name }}"
+NFT_TABLE="inet anxs_keepalived"
+NFT_CHAIN="quiet_{{ item.name }}"
+
+log() {
+    echo "$*" | systemd-cat -p info -t keepalived_{{ item.name }}
+}
+
+ensure_chain() {
+    nft -f - <<EOF
+add table ${NFT_TABLE}
+add chain ${NFT_TABLE} ${NFT_CHAIN} { type filter hook output priority -10; policy accept; }
+EOF
+}
+
+quiet() {
+    ensure_chain
+    nft -f - <<EOF
+flush chain ${NFT_TABLE} ${NFT_CHAIN}
+add rule ${NFT_TABLE} ${NFT_CHAIN} oifname "${VMAC_IF}" counter drop
+EOF
+    ip link set dev "$VMAC_IF" multicast off
+    log "${VMAC_IF} quieted: egress dropped, multicast off"
+}
+
+release() {
+    ensure_chain
+    nft flush chain ${NFT_TABLE} "${NFT_CHAIN}"
+    ip link set dev "$VMAC_IF" multicast on
+    log "${VMAC_IF} released: egress open, multicast on"
+}
+
+state="${1:-}"
+
+# "apply" re-asserts whatever keepalived last reported, for a converge that
+# changed this script on an instance that will not transition any time soon.
+if [ "$state" = "apply" ] ; then
+    if [ ! -r "$STATE_FILE" ] ; then
+        log "no state recorded for {{ item.name }} yet; the first transition applies it"
+        exit 0
+    fi
+    case "$(cat "$STATE_FILE")" in
+        leader)   state="MASTER" ;;
+        failover) state="BACKUP" ;;
+        error)    state="FAULT" ;;
+        *)
+            log "unrecognised state in ${STATE_FILE}"
+            exit 1
+            ;;
+    esac
+fi
+
+case "$state" in
+    MASTER)
+        release
+        ;;
+    BACKUP|FAULT)
+        quiet
+        ;;
+    *)
+        echo "usage: $0 MASTER|BACKUP|FAULT|apply" >&2
+        exit 2
+        ;;
+esac

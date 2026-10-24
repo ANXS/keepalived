@@ -12,11 +12,52 @@
       ansible.builtin.apt:
         pkg:
           # shellcheck lints the rendered scripts, curl backs the http_health
-          # builtin check, iputils-ping probes the VIP from the peer node.
+          # builtin check, iputils-ping probes the VIP from the peer node,
+          # tcpdump watches the peer's uplink for frames sourced from the
+          # virtual MAC.
           - "shellcheck"
           - "curl"
           - "iputils-ping"
+          - "tcpdump"
         state: present
+
+    # Sends multicast out a named interface the way a UPnP/SSDP discovery
+    # client does: that is the traffic a quieted BACKUP must never emit.
+    - name: "Install the virtual MAC leak sender"
+      ansible.builtin.copy:
+        dest: "/usr/local/bin/molecule-vmac-send"
+        owner: "root"
+        group: "root"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+          """Send UDP multicast datagrams out one interface; report how many left."""
+          import socket
+          import struct
+          import sys
+
+          ifname = sys.argv[1]
+          count = int(sys.argv[2]) if len(sys.argv) > 2 else 3
+          sent = errors = 0
+          last = ""
+          try:
+              index = socket.if_nametoindex(ifname)
+          except OSError as exc:
+              print(f"sent=0 errors={count} last={exc.strerror}")
+              sys.exit(0)
+          for _ in range(count):
+              sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+              try:
+                  mreqn = struct.pack("4s4si", b"\0" * 4, b"\0" * 4, index)
+                  sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, mreqn)
+                  sock.sendto(b"M-SEARCH * HTTP/1.1\r\n\r\n", ("239.255.255.250", 1900))
+                  sent += 1
+              except OSError as exc:
+                  errors += 1
+                  last = exc.strerror or str(exc)
+              finally:
+                  sock.close()
+          print(f"sent={sent} errors={errors} last={last}")
 
     - name: "Create health endpoint document root"
       ansible.builtin.file:

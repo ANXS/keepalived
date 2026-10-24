@@ -1,0 +1,112 @@
+---
+# Included from side_effect.yml once per phase, after the deliberate drain has
+# put the VIP on the higher-priority node. Parameters:
+#   leak_phase  control | quiet
+#   leak_quiet  whether the backup's quiet helper is applied; false lifts it so
+#               the control phase proves the capture and the sender both work
+# Writes /var/run/keepalived/vmac_leak_<phase> on both nodes.
+
+- name: "({{ leak_phase }}) derive the virtual MAC of the vmac instance"
+  ansible.builtin.set_fact:
+    leak_vmac_mac: "00:00:5e:00:01:{{ '%02x' | format(vmac_instances[0].router_id) }}"
+    leak_vmac_if: "vrrp.{{ vmac_instances[0].router_id }}"
+    leak_chain: "quiet_{{ vmac_instances[0].name }}"
+
+- name: "({{ leak_phase }}) set the backup's quiet state for this phase"
+  ansible.builtin.command:
+    cmd: >-
+      /etc/keepalived/vmac_quiet_{{ vmac_instances[0].name }}.sh
+      {{ 'BACKUP' if leak_quiet | bool else 'MASTER' }}
+  when: not handoff_is_high | bool
+  changed_when: false
+
+- name: "({{ leak_phase }}) read the drop counter before sending"
+  ansible.builtin.shell:
+    cmd: >-
+      nft list chain inet anxs_keepalived {{ leak_chain }}
+      | sed -n 's/.*packets \([0-9]*\).*/\1/p' | head -n1
+  register: leak_counter_before
+  when: not handoff_is_high | bool
+  changed_when: false
+
+# The sender's datagram, not just its source MAC: the master's own gratuitous
+# ARPs and VIP replies leave eth0 under the same MAC and must not count.
+- name: "({{ leak_phase }}) the master listens for the backup's datagram under the virtual MAC"
+  ansible.builtin.shell:
+    cmd: >-
+      timeout 15 tcpdump -enni eth0 -l -c 20
+      'ether src {{ leak_vmac_mac }} and udp dst port 1900'
+      > /tmp/vmac_leak_{{ leak_phase }}.log 2> /tmp/vmac_leak_{{ leak_phase }}.err
+  async: 40
+  poll: 0
+  register: leak_capture
+  when: handoff_is_high | bool
+
+- name: "({{ leak_phase }}) wait until tcpdump reports it is listening"
+  ansible.builtin.wait_for:
+    path: "/tmp/vmac_leak_{{ leak_phase }}.err"
+    search_regex: "listening on"
+    timeout: 15
+  when: handoff_is_high | bool
+
+- name: "({{ leak_phase }}) give the capture a moment to arm"
+  ansible.builtin.pause:
+    seconds: 1
+
+- name: "({{ leak_phase }}) the backup sends multicast out its virtual MAC interface"
+  ansible.builtin.command:
+    cmd: "/usr/local/bin/molecule-vmac-send {{ leak_vmac_if }} 3"
+  register: leak_send
+  when: not handoff_is_high | bool
+  changed_when: false
+
+# timeout(1) exits 124 when fewer than 20 frames arrive, which is the expected
+# shape in both phases; the frame count below is the verdict, not the rc.
+- name: "({{ leak_phase }}) wait for the capture window to close"
+  ansible.builtin.async_status:
+    jid: "{{ leak_capture.ansible_job_id }}"
+  register: leak_capture_done
+  until: leak_capture_done.finished
+  retries: 30
+  delay: 1
+  when: handoff_is_high | bool
+  failed_when: false
+
+- name: "({{ leak_phase }}) count the frames the master saw"
+  ansible.builtin.shell:
+    cmd: "grep -c '{{ leak_vmac_mac }}' /tmp/vmac_leak_{{ leak_phase }}.log || true"
+  register: leak_frames
+  when: handoff_is_high | bool
+  changed_when: false
+
+- name: "({{ leak_phase }}) keep tcpdump's own account for the verifier"
+  ansible.builtin.shell:
+    cmd: "tr '\\n' ' ' < /tmp/vmac_leak_{{ leak_phase }}.err"
+  register: leak_capture_stderr
+  when: handoff_is_high | bool
+  changed_when: false
+
+- name: "({{ leak_phase }}) read the drop counter after sending"
+  ansible.builtin.shell:
+    cmd: >-
+      nft list chain inet anxs_keepalived {{ leak_chain }}
+      | sed -n 's/.*packets \([0-9]*\).*/\1/p' | head -n1
+  register: leak_counter_after
+  when: not handoff_is_high | bool
+  changed_when: false
+
+- name: "({{ leak_phase }}) record the result for the verifier"
+  ansible.builtin.copy:
+    dest: "/var/run/keepalived/vmac_leak_{{ leak_phase }}"
+    owner: "root"
+    group: "root"
+    mode: "0644"
+    content: |
+      phase={{ leak_phase }}
+      quiet_applied={{ leak_quiet }}
+      is_master={{ handoff_is_high }}
+      frames_seen={{ leak_frames.stdout | default('') | trim }}
+      capture_stderr={{ leak_capture_stderr.stdout | default('') | trim }}
+      sender_result={{ leak_send.stdout | default('') | trim }}
+      counter_before={{ leak_counter_before.stdout | default('') | trim }}
+      counter_after={{ leak_counter_after.stdout | default('') | trim }}

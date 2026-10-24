@@ -33,3 +33,17 @@
       or keepalived_check_wrappers.changed | default(false)
       or keepalived_builtin_scripts.changed | default(false)
       or keepalived_user_scripts.changed | default(false))
+
+# keepalived's notify applies the helper on every transition, including the
+# first after start. A changed helper on an instance that is not about to
+# transition would otherwise wait indefinitely.
+- name: "Apply the virtual MAC quiet state to running instances"
+  ansible.builtin.command:
+    cmd: "{{ keepalived_conf_dir }}/vmac_quiet_{{ item.name }}.sh apply"
+  loop: "{{ keepalived_vmac_quiet_instances | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: >-
+    keepalived_vmac_quiet_instances | default([]) | length > 0
+    and keepalived_vmac_quiet_scripts.changed | default(false)
+  changed_when: true

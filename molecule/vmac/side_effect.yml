@@ -216,3 +216,21 @@
           holds_vip_now={{ vmac_vip in handoff_after.stdout }}
           owner_is_high_priority={{
             (vmac_vip in handoff_after.stdout) == (handoff_is_high | bool) }}
+
+    # ---------- the quieted backup must leak nothing from the virtual MAC ----------
+
+    # Control first: with quieting lifted the master's uplink must see the
+    # backup's multicast arrive under the virtual MAC, or the capture and the
+    # sender prove nothing. Then quieting is restored and the same send must
+    # put nothing on the wire.
+    - name: "prove the leak instrument with quieting lifted"
+      ansible.builtin.include_tasks: leak_probe.yml
+      vars:
+        leak_phase: control
+        leak_quiet: false
+
+    - name: "measure the leak with quieting applied"
+      ansible.builtin.include_tasks: leak_probe.yml
+      vars:
+        leak_phase: quiet
+        leak_quiet: true

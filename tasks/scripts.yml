@@ -25,6 +25,19 @@
   when: item.notify_script | default('') != ''
   register: keepalived_custom_notify_scripts
 
+- name: "Deploy virtual MAC quiet helpers"
+  ansible.builtin.template:
+    src: "vmac_quiet.sh.j2"
+    dest: "{{ keepalived_conf_dir }}/vmac_quiet_{{ item.name }}.sh"
+    owner: "root"
+    group: "{{ keepalived_script_group }}"
+    mode: "0770"
+  loop: "{{ keepalived_instances }}"
+  loop_control:
+    label: "vmac_quiet_{{ item.name }}.sh"
+  when: item.vmac_quiet_backup | default(false) | bool
+  register: keepalived_vmac_quiet_scripts
+
 - name: "Deploy check wrappers"
   ansible.builtin.template:
     src: "check_wrapper.sh.j2"

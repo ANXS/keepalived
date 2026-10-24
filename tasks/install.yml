@@ -4,6 +4,34 @@
     pkg: "keepalived"
     state: present
 
+- name: "Collect instances that quiet their virtual MAC while BACKUP"
+  ansible.builtin.set_fact:
+    keepalived_vmac_quiet_instances: >-
+      {{ keepalived_instances
+         | selectattr('vmac_quiet_backup', 'defined')
+         | selectattr('vmac_quiet_backup')
+         | list }}
+
+# Silencing the VMAC interface in BACKUP is only safe when VRRP never uses it,
+# which is what vmac_xmit_base guarantees.
+- name: "Require use_vmac and vmac_xmit_base where the virtual MAC is quieted"
+  ansible.builtin.assert:
+    that:
+      - item.use_vmac | default(false) | bool
+      - item.vmac_xmit_base | default(true) | bool
+    fail_msg: >-
+      vmac_quiet_backup on instance {{ item.name }} requires use_vmac: true
+      and vmac_xmit_base: true
+  loop: "{{ keepalived_vmac_quiet_instances }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: "Install nftables for virtual MAC quieting"
+  ansible.builtin.apt:
+    pkg: "nftables"
+    state: present
+  when: keepalived_vmac_quiet_instances | length > 0
+
 - name: "Enable ip_nonlocal_bind"
   ansible.posix.sysctl:
     name: "net.ipv4.ip_nonlocal_bind"

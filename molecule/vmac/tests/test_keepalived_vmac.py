@@ -29,6 +29,7 @@ HIGH_PRIORITY = 200
 RENDERED_SCRIPTS = [
     "/etc/keepalived/notify_vmac.sh",
     "/etc/keepalived/notify_preempt.sh",
+    "/etc/keepalived/vmac_quiet_vmac.sh",
     "/etc/keepalived/check_wrapper_vmac.sh",
     "/etc/keepalived/check_wrapper_preempt.sh",
     "/etc/keepalived/check_builtin_vmac.sh",
@@ -463,6 +464,112 @@ def test_preempt_vip_converged(host):
             "instance with use_vmac false should hold its VIP on eth0"
 
 
+# --- the virtual MAC stays quiet while BACKUP ----------------------------
+
+
+def _vmac_interface(host):
+    """The macvlan keepalived creates for the vmac instance, from its VRID."""
+    match = re.search(
+        r"virtual_router_id\s+(\d+)", _instance_block(host, VMAC)
+    )
+    assert match, "no virtual_router_id rendered for instance " + VMAC
+    return "vrrp." + match.group(1)
+
+
+def _quiet_chain(host):
+    return host.run("nft list chain inet anxs_keepalived quiet_" + VMAC)
+
+
+def test_nftables_installed_where_quieting_is_enabled(host):
+    """The quiet helper needs nft, so the role installs it."""
+    assert host.package("nftables").is_installed
+
+
+def test_quiet_helper_rendered_only_where_enabled(host):
+    """vmac_quiet_backup renders a helper and wires it into notify; the
+    instance without it gets neither."""
+    assert host.file("/etc/keepalived/vmac_quiet_vmac.sh").exists
+    assert not host.file("/etc/keepalived/vmac_quiet_preempt.sh").exists
+    notify_vmac = host.file("/etc/keepalived/notify_vmac.sh").content_string
+    notify_preempt = host.file(
+        "/etc/keepalived/notify_preempt.sh"
+    ).content_string
+    assert "vmac_quiet_vmac.sh" in notify_vmac, \
+        "notify_vmac.sh does not invoke the quiet helper"
+    assert "vmac_quiet" not in notify_preempt, \
+        "the quiet helper leaked into an instance that did not enable it"
+
+
+def test_virtual_mac_is_quiet_on_the_backup_and_open_on_the_master(host):
+    """BACKUP: no MULTICAST flag and an egress drop on vrrp.<vrid>.
+    MASTER: MULTICAST flag present and the chain empty.
+
+    Decided from this node's own VIP ownership, so it holds whichever node
+    pytest happens to be visiting.
+    """
+    vip = _vip(host, VMAC)
+    assert _wait_for_consistent_state(host, VMAC, vip), (
+        "state file says {!r} but VIP {} presence is {}".format(
+            _state(host, VMAC), vip, _has_vip(host, vip)
+        )
+    )
+    iface = _vmac_interface(host)
+    link = host.check_output("ip -d -o link show dev " + iface)
+    chain = _quiet_chain(host)
+    assert chain.rc == 0, (
+        "the quiet chain is missing:\n" + chain.stdout + chain.stderr
+    )
+    drop = re.search(
+        r'oifname "{}".*drop'.format(re.escape(iface)), chain.stdout
+    )
+    if _has_vip(host, vip):
+        assert "MULTICAST" in link, \
+            "the master's {} lost its multicast flag: {}".format(iface, link)
+        assert drop is None, \
+            "the master still drops its own VIP egress:\n" + chain.stdout
+    else:
+        assert "MULTICAST" not in link, \
+            "the backup's {} still has multicast on: {}".format(iface, link)
+        assert drop is not None, (
+            "the backup has no egress drop for {}:\n{}".format(
+                iface, chain.stdout
+            )
+        )
+
+
+def test_quieting_was_proven_on_the_wire(host):
+    """Read back from the side_effect stage: with quieting lifted the master
+    saw the backup's multicast under the virtual MAC (so the instrument
+    works); with quieting applied the same send put nothing on the wire.
+
+    On the backup the same records show the frames were either refused by
+    the kernel or counted by the drop rule.
+    """
+    control = _marker(host, "vmac_leak_control")
+    quiet = _marker(host, "vmac_leak_quiet")
+    if control["is_master"] == "True":
+        assert int(control["frames_seen"]) >= 1, (
+            "control phase saw no virtual-MAC frames, so the capture or the "
+            "sender is broken and the quiet result below would be "
+            "theatre: " + str(control)
+        )
+        assert int(quiet["frames_seen"]) == 0, (
+            "a quieted backup still put frames on the wire under the "
+            "virtual MAC: " + str(quiet)
+        )
+        return
+    sent_control = re.search(r"sent=(\d+)", control["sender_result"])
+    assert sent_control and int(sent_control.group(1)) >= 1, \
+        "the control send never left the socket: " + str(control)
+    sent_quiet = int(re.search(r"sent=(\d+)", quiet["sender_result"]).group(1))
+    before = int(quiet["counter_before"] or 0)
+    after = int(quiet["counter_after"] or 0)
+    assert sent_quiet == 0 or after - before >= sent_quiet, (
+        "frames left the socket on the quieted backup without being "
+        "dropped: " + str(quiet)
+    )
+
+
 # --- failover, under a virtual MAC --------------------------------------
 # These mutate state: keep them after the convergence tests, and keep the
 # manual notify-script invocations last of all.
@@ -600,8 +707,9 @@ def test_deliberate_drain_returned_the_vip_to_the_higher_priority_node(host):
 def test_notify_actions_execute_on_transition(host):
     """The rendered notify actions actually run on a transition.
 
-    Leaves "error" in the instance state file, so it must run after every test
-    that reads it.
+    Leaves "error" in the instance state file and, on an instance with
+    vmac_quiet_backup, quiets the virtual MAC exactly as a real transition
+    would, so it must run after every test that reads either.
     """
     host.run("rm -f " + STATE_DIR + "/vmac_fault_action")
     result = host.run("/etc/keepalived/notify_vmac.sh INSTANCE vmac FAULT")

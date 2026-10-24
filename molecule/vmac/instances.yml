@@ -30,6 +30,7 @@ vmac_instances:
     nopreempt: true
     use_vmac: true
     vmac_xmit_base: true
+    vmac_quiet_backup: true
     # Far below any sane real value, so a test run sees several refreshes.
     garp_master_refresh: 7
     garp_master_refresh_repeat: 2

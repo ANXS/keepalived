@@ -12,6 +12,7 @@ Ansible role for keepalived VRRP management. Supports multiple VRRP instances wi
 * Ansible 2.14 or higher.
 * Debian 12+ or Ubuntu 20.04+.
 * `ansible.posix` collection (for the `sysctl` module).
+* `nftables` is installed by the role on hosts whose instances set `vmac_quiet_backup`.
 
 ## Variables
 
@@ -21,6 +22,7 @@ Some commonly adjusted variables. See [`defaults/main.yml`](https://github.com/A
 * `keepalived_check_scripts` (default `[]`) is a list of user-provided check script templates to render into the keepalived config directory.
 * `keepalived_validate_config` (default `true`) runs the rendered config through keepalived's own parser before it may replace the live file, and again before any restart. A config that fails never reaches `/etc/keepalived`, nothing is restarted, and the play fails with keepalived's own diagnostics. `keepalived_config_test_cmd` (default `keepalived -t -f %s`) is the command used, where `%s` is the file under test.
 * Per-instance `garp_master_refresh` (and `garp_master_refresh_repeat`) re-sends gratuitous ARP for the VIP every N seconds while this node is master. keepalived GARPs only on a VRRP transition, so with `use_vmac` and `nopreempt` nothing refreshes the upstream IP-to-MAC mapping and the VIP black-holes once it ages out of the gateway's ARP cache. Set it well below the shortest upstream ARP cache timeout. Both keys are unset by default and render nothing unless set.
+* Per-instance `vmac_quiet_backup` keeps a `use_vmac` node silent on its virtual MAC interface while it is not master. keepalived leaves `vrrp.<router_id>` up in BACKUP, so any process that enumerates interfaces -- UPnP/SSDP or mDNS discovery, a kernel IGMP join -- transmits from it under the VIP's MAC, and every switch between the nodes re-learns that MAC on the backup's port and black-holes the VIP until the master transmits again. While BACKUP or FAULT the role drops every frame leaving the interface (an nftables chain in its own `inet anxs_keepalived` table, untouched by firewall-manager reloads) and clears the interface's multicast flag; MASTER restores both. Requires `vmac_xmit_base` (the default) so VRRP itself never needs the interface in BACKUP. Default off.
 * Per-instance `builtin_checks` (DNS dig, HTTP health) lets instances opt into common health checks without shipping a custom script.
 * Per-instance `maint_file` enables a check wrapper that forces FAULT when the file exists, for graceful maintenance drains.
 * Per-instance `nopreempt` retains the current healthy master after failover instead of allowing a recovered higher-priority peer to trigger a second cutover. Instances using it must start in `BACKUP`.
@@ -33,7 +35,7 @@ Tests use [Molecule](https://github.com/ansible/molecule) with Docker and [Testi
 There are two scenarios:
 
 * `molecule/default` covers the simple shape: one instance, `use_vmac: false`, no builtin checks, no notify actions. It verifies package installation and sysctl, config rendering, notify script state transitions and state-file handling, check wrapper maintenance-mode logic, VIP convergence (master holds the VIP, backup does not), maintenance-triggered failover and preemption recovery, and idempotence. It also asserts the optional directives are ABSENT when unset, which keeps the rendered config byte-identical for consumers that do not use them. Runs across Debian 12/13 and Ubuntu 20.04/22.04/24.04.
-* `molecule/vmac` (`make test-vmac`) covers `use_vmac` with `vmac_xmit_base`, `garp_master_refresh`, populated `builtin_checks` and `notify_actions`, plus a second instance on the `nopreempt: false` + `preempt_delay` path. It asks the running daemon what it actually parsed (via its SIGUSR1 data dump) rather than trusting the rendered text, proves an invalid config is refused rather than shipped (the previous config stays on disk and keepalived is not restarted), and measures how long the VIP is unreachable when keepalived is restarted on one node at a time.
+* `molecule/vmac` (`make test-vmac`) covers `use_vmac` with `vmac_xmit_base`, `garp_master_refresh`, populated `builtin_checks` and `notify_actions`, plus a second instance on the `nopreempt: false` + `preempt_delay` path. It asks the running daemon what it actually parsed (via its SIGUSR1 data dump) rather than trusting the rendered text, proves an invalid config is refused rather than shipped (the previous config stays on disk and keepalived is not restarted), and measures how long the VIP is unreachable when keepalived is restarted on one node at a time. It also proves `vmac_quiet_backup` on the wire: with quieting lifted, the master's uplink sees the backup's multicast arrive under the virtual MAC; with quieting applied, the same send produces no frame.
 
 ## Note on AI Usage
 
